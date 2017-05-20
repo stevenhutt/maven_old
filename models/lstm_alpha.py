@@ -1,5 +1,9 @@
 import pandas as pd
 import numpy as np
+
+from utils.load_data import load_data_tn
+from utils.process_data import build_inputs_targets
+
 from keras.models import Sequential
 from keras.layers.recurrent import LSTM, SimpleRNN
 from keras.layers import Dense, Activation
@@ -12,131 +16,30 @@ from keras import metrics
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
-data_dir = '/home/shutt/repos/my_repos/maven/data/'
 
-def load_data():
-    # load market data
-    filename = 'TN.csv'
-    df_all = pd.read_csv(data_dir + filename)
-
-    # remove 'SDF' and record symbol list
-    del df_all['SDF']
-    syms = list(df_all)[1:]
-
-    # add columns converting str timestamp to time and date
-    df_all['datetime'] = pd.to_datetime(df_all['Timestamp'])
-    df_all['time'] = df_all['datetime'].map(lambda x: x.time())
-    df_all['date'] = df_all['datetime'].map(lambda x: x.date())
-    del df_all['Timestamp']
-
-    # select rows with timestamps  07:00:00.0000000 <= ts <= 15:29:59.999999
-    t_start = pd.Timestamp('07:00:00.0000000').time()
-    t_end = pd.Timestamp('15:29:59.999999').time()
-    df = df_all[(df_all['time'] > t_start) & (df_all['time'] < t_end)]
-
-    # drop date/time columns
-    df_syms = df[syms]
-    data = df_syms.as_matrix()
-
-    nr, ns = data.shape
-    nt_n = 50
-    nt_p = 10
-
-    wins = np.zeros((nr-nt_p, nt_n, ns))
-    targets = np.zeros((nr-nt_p, ns))
-    for r_idx in range(nr-nt_n-nt_p):
-        for t_idx in range(nt_n):
-            wins[r_idx, t_idx, :] = data[r_idx+t_idx, :]
-        targets[r_idx, :] = data[r_idx+nt_n+nt_p, :]
-
-    inputs = np.diff(wins, axis=1).reshape((nr-nt_p, -1))
-
-    nr, nx = inputs.shape
-    permutation = np.random.permutation(nr)
-    inputs = inputs[permutation, :]
-    targets = targets[permutation, :]
-    trunc_data = False
-    if trunc_data:
-        nr = 5000
-        data = data[:nr,:]
-        inputs = inputs[:nr, :]
-        targets = targets[:nr, :]
-    return data, inputs, targets, syms
-
-
-def build_inputs_targets(data, stride, nt_n, nt_p, use_cmp=True):
-    # data_shift[i] = data[i+stride]
-    data_shift = data[stride:, :]
-    # deltas[i] = data[i+stride] - data[i]
-    deltas = data_shift[:, :] - data[:-stride, :]
-
-    # compress dynamic range
-    if use_cmp:
-        deltas_cmp = np.sign(deltas) * np.log(np.abs(deltas) + 1.0)
-    else:
-        deltas_cmp = deltas
-
-    nr, ns = deltas_cmp.shape
-    nw = nr - nt_n - nt_p*stride
-    fwd_offset = nt_p * stride
-    inputs = np.zeros((nw, nt_n, ns))
-    targets = np.zeros((nw, ns))
-    for r_idx in range(nw):
-        win_start = r_idx
-        win_end = r_idx + nt_n
-        # min time index: r_idx + stride
-        # max time index: r_idx + nt_n + stride
-        inputs[r_idx, :] = deltas_cmp[win_start:win_end, :]
-        # min time index: r_idx + nt_n + stride
-        # max time index: r_idx +m nt+n + stride + nt_p*stride
-        targets[r_idx, :] = data_shift[win_end+fwd_offset, :] - data_shift[win_end, :]
-    return inputs, targets
-
-def build_inputs_targets2(data, stride, nt_n, nt_p):
-    nr, ns = data.shape
-    nw = nr - nt_n*stride - nt_p*stride
-    inputs = np.zeros((nw, nt_n, ns))
-    targets = np.zeros((nw, ns))
-    for r_idx in range(nw):
-        for tn_idx in range(nt_n):
-            inputs[r_idx, tn_idx, :] = data[r_idx + (tn_idx+1)*stride, :] - data[r_idx + tn_idx*stride, :]
-        targets[r_idx, :] = data[r_idx + nt_n*stride + nt_p*stride, :] - data[r_idx + nt_n*stride, :]
-    inputs =  np.sign(inputs) * np.log(np.abs(inputs) + 1.0)
-    return inputs, targets
-
-
-
-
-def rw_data(nr, ns):
-    np.random.seed(3893234)
-    incs = np.random.normal(size=(nr, ns), loc=0.0, scale=0.1)
-    data = np.cumsum(incs, axis=0)
-    syms = [i for i in range(ns)]
-    return data, syms
-
-def use_lstm(data, syms, device):
+def use_lstm(data_dict, syms, device):
     stride = 5
     nt_n = 100
     nt_p = 1
 
-    inputs, targets = build_inputs_targets2(data, stride, nt_n, nt_p)
+    vld_tst_split = 0.1
+    action = 'all'
+    block = True
+    inputs_dict, targets_dict = build_inputs_targets(data_dict, stride, nt_n, nt_p, vld_tst_split, action, block)
 
-    unique, counts = np.unique(np.sign(targets), return_counts=True)
-    print dict(zip(unique, counts))
 
-    nr, nt, ns = inputs.shape
-    nz = targets.shape[1]
+    inputs_trn = inputs_dict['trn']
+    targets_trn = targets_dict['trn']
+    inputs_vld = inputs_dict['vld']
+    targets_vld = targets_dict['vld']
 
-    val_split = 0.2
-    nr_trn = int(nr * (1.0 - val_split))
-    inputs_trn = inputs[:nr_trn]
-    targets_trn = targets[:nr_trn, :]
-    inputs_vld = inputs[nr_trn:]
-    targets_vld = targets[nr_trn:, :]
-
+    nr_trn = inputs_trn.shape[0]
     permutation = np.random.permutation(nr_trn)
     inputs_trn = inputs_trn[permutation, :, :]
     targets_trn = targets_trn[permutation, :]
+
+    nr, nt_n, ns = inputs_trn.shape
+    nz = targets_trn.shape[1]
 
     nt = nt_n
     nh = 500

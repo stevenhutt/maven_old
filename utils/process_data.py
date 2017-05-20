@@ -17,15 +17,15 @@ def split_data(inputs, targets, vld_tst_split):
 
     return inputs_dict, targets_dict
 
-def build_inputs_targets(data_dict, stride, nt_n, nt_p, vld_tst_split, action='all'):
-    data = data_dict[action]
+
+def window_data(data, stride, nt_n, nt_p, block=False):
     # data_shift[i] = data[i+stride]
     data_shift = data[stride:, :]
     # deltas[i] = data[i+stride] - data[i]
     deltas = data_shift[:, :] - data[:-stride, :]
 
     # compress dynamic range
-    deltas_cmp = np.sign(deltas) * np.log(np.abs(deltas) + 1.0)
+    deltas_cmp = deltas#np.sign(deltas) * np.log(np.abs(deltas) + 1.0)
 
     nr, ns = deltas_cmp.shape
     nw = nr - nt_n - nt_p*stride
@@ -41,7 +41,30 @@ def build_inputs_targets(data_dict, stride, nt_n, nt_p, vld_tst_split, action='a
         inputs_block[r_idx, :, :] = deltas_cmp[win_start:win_end, :]
         targets[r_idx, :] = data_shift[win_end+fwd_offset, :] - data_shift[win_end, :]
 
-    inputs_dict, targets_dict = split_data(inputs, targets, vld_tst_split)
+    if block:
+        return inputs_block, targets
+    else:
+        return inputs, targets
+
+def build_inputs_targets(data_dict, stride, nt_n, nt_p, vld_tst_split, action='all', block=False):
+    if action == 'all':
+        data = data_dict[action]
+        inputs, targets = window_data(data, stride, nt_n, nt_p, block)
+        inputs_dict, targets_dict = split_data(inputs, targets, vld_tst_split)
+    elif action == 'ampm':
+        data_am = data_dict['am']
+        data_pm = data_dict['pm']
+        data_trn = data_am
+        nr_pm = data_pm.shape[0]
+        nr_vld = int(nr_pm / 2)
+        data_vld = data_pm[:nr_vld, :]
+        data_tst = data_pm[nr_vld:, :]
+        inputs_trn, targets_trn = window_data(data_trn, stride, nt_n, nt_p, block)
+        inputs_vld, targets_vld = window_data(data_vld, stride, nt_n, nt_p, block)
+        inputs_tst, targets_tst = window_data(data_tst, stride, nt_n, nt_p, block)
+        inputs_dict = {'trn':inputs_trn, 'vld':inputs_vld, 'tst':inputs_tst}
+        targets_dict = {'trn':targets_trn, 'vld':targets_vld, 'tst':targets_tst}
+
     return inputs_dict, targets_dict
 
 

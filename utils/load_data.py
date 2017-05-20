@@ -33,27 +33,3 @@ def load_data_tn():
     data_pm = df_pm[syms].as_matrix()
     data_dict = {'all': data_all, 'am':data_am, 'pm':data_pm}
     return data_dict, syms
-
-def build_inputs_targets(data, stride, nt_n, nt_p):
-    # data_shift[i] = data[i+stride]
-    data_shift = data[stride:, :]
-    # deltas[i] = data[i+stride] - data[i]
-    deltas = data_shift[:, :] - data[:-stride, :]
-
-    # compress dynamic range
-    deltas_cmp = np.sign(deltas) * np.log(np.abs(deltas) + 1.0)
-
-    nr, ns = deltas_cmp.shape
-    nw = nr - nt_n - nt_p*stride
-    nx = nt_n * ns
-    fwd_offset = nt_p * stride
-    inputs = np.zeros((nw, nx))
-    inputs_block = np.zeros((nw, nt_n, ns))
-    targets = np.zeros((nw, ns))
-    for r_idx in range(nw):
-        win_start = r_idx
-        win_end = r_idx + nt_n
-        inputs[r_idx, :] = deltas_cmp[win_start:win_end, :].flatten()
-        inputs_block[r_idx, :, :] = deltas_cmp[win_start:win_end, :]
-        targets[r_idx, :] = data_shift[win_end+fwd_offset, :] - data_shift[win_end, :]
-    return inputs, targets, inputs_block
